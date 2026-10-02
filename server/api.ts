@@ -310,3 +310,15 @@ apiApp.get("/api/system/terminal-events", (_req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Centralized error handling middleware to prevent API crashes
+apiApp.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error("[Vanguard API Error Handler]:", err);
+  if (!res.headersSent) {
+    res.status(500).json({
+      error: "An internal server error occurred.",
+      message: err?.message || String(err),
+    });
+  }
+});
+

@@ -20,6 +20,10 @@ class VanguardWebSocketService {
 
     this.wss = new WebSocketServer({ server, path: "/ws/vanguard" });
 
+    this.wss.on("error", (err) => {
+      console.error("[Vanguard WebSocketServer Error]:", err);
+    });
+
     this.wss.on("connection", (ws: WebSocket) => {
       this.clients.add(ws);
 
