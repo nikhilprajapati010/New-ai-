@@ -1,0 +1,6 @@
+{
+  "name": "AutoDev Shell",
+  "description": "Autonomous self-updating AI control shell with user chat interface, executive admin dashboard, AI PR approval queue, telemetry, and emergency kill switch.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

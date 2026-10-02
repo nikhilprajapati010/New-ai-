@@ -1,0 +1,97 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered user profile with role flag",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["ADMIN", "USER"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "SystemState": {
+      "title": "SystemState",
+      "description": "Global operational state and kill switch status",
+      "type": "object",
+      "properties": {
+        "killSwitch": { "type": "boolean" },
+        "autonomousLoopActive": { "type": "boolean" },
+        "lastHourlyTriggerAt": { "type": "string" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["killSwitch"]
+    },
+    "PendingUpdate": {
+      "title": "PendingUpdate",
+      "description": "Autonomous AI-generated code diff queued for executive review",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 256 },
+        "targetFile": { "type": "string", "maxLength": 256 },
+        "branch": { "type": "string", "maxLength": 128 },
+        "summary": { "type": "string", "maxLength": 2048 },
+        "diff": { "type": "string", "maxLength": 65536 },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED"] },
+        "passRate": { "type": "number" },
+        "totalTests": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "reviewedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "targetFile", "diff", "status"]
+    },
+    "TelemetryLog": {
+      "title": "TelemetryLog",
+      "description": "System event, audit, error and token telemetry record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string" },
+        "level": { "type": "string", "enum": ["INFO", "WARN", "ERROR"] },
+        "source": { "type": "string", "maxLength": 128 },
+        "message": { "type": "string", "maxLength": 4096 },
+        "tokensUsed": { "type": "number" }
+      },
+      "required": ["id", "timestamp", "level", "message"]
+    },
+    "AdminDoc": {
+      "title": "AdminDoc",
+      "description": "Admin authorization entry",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "grantedAt": { "type": "string" }
+      },
+      "required": ["uid"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and RBAC assignment"
+    },
+    "/system_state/{stateId}": {
+      "schema": "SystemState",
+      "description": "System state including global kill switch"
+    },
+    "/pending_updates/{updateId}": {
+      "schema": "PendingUpdate",
+      "description": "AI-generated pull requests awaiting admin review"
+    },
+    "/telemetry_logs/{logId}": {
+      "schema": "TelemetryLog",
+      "description": "System telemetry, errors, and token usage logs"
+    },
+    "/admins/{adminId}": {
+      "schema": "AdminDoc",
+      "description": "List of authorized administrator uids"
+    }
+  }
+}
