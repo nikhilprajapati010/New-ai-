@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import { apiApp } from "./server/api.js";
 import { vanguardWebSocket } from "./server/websocketService.js";
 import { vanguardContinuousLoop } from "./server/continuousLoop.js";
+import { securityHeadersMiddleware } from "./server/securityService.js";
 
 dotenv.config();
 
@@ -52,6 +53,8 @@ function resolveClientDist(): string {
 
 async function startServer() {
   const app = express();
+  app.disable("x-powered-by");
+  app.use(securityHeadersMiddleware);
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Mount API endpoints

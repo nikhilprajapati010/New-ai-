@@ -164,7 +164,7 @@ export async function analyzeLogsAndGenerateUpdate(
                 },
                 branch: {
                   type: Type.STRING,
-                  description: "Git branch slug, e.g., patch/fix-connection-leak",
+                  description: "Git branch slug (patch/fix-connection-leak)",
                 },
                 targetFile: {
                   type: Type.STRING,

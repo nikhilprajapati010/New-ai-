@@ -1,8 +1,16 @@
 node_modules/
 build/
 dist/
+dist-server/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+.vanguard_backups/
+*.bak
+*.tmp
+*.swp
+*.key
+*.pem
+*.cert

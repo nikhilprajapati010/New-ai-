@@ -152,7 +152,7 @@ export const UpgradeController: React.FC<UpgradeControllerProps> = ({
               type="text"
               value={customTopic}
               onChange={(e) => setCustomTopic(e.target.value)}
-              placeholder="e.g. WebSocket connection heartbeat, Token bucket rate limiter..."
+              placeholder="WebSocket connection heartbeat, Token bucket rate limiter..."
               className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 w-full sm:w-72 focus:outline-none focus:border-cyan-500/50"
             />
           </div>

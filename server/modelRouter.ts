@@ -17,7 +17,7 @@ export const MODEL_CHAIN: ModelTierConfig[] = [
     id: "gemini-1.5-pro",
     name: "Gemini 1.5 Pro",
     priority: 1,
-    apiModel: "gemini-2.5-pro",
+    apiModel: "gemini-2.5-flash",
     description: "High-reasoning primary model for architectural code synthesis",
   },
   {

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ArrowUp, Sparkles, Copy, Check } from "lucide-react";
+import { sanitizeClientInput } from "../utils/sanitize.ts";
 
 interface Message {
   id: string;
@@ -26,7 +27,8 @@ export const UserChat: React.FC = () => {
   }, [messages, isReplying]);
 
   const handleSend = async (messageText?: string) => {
-    const textToSend = (messageText || input).trim();
+    const rawText = (messageText || input).trim();
+    const textToSend = sanitizeClientInput(rawText, 2000);
     if (!textToSend || isReplying) return;
 
     const userMessage: Message = {
@@ -63,6 +65,10 @@ export const UserChat: React.FC = () => {
           replayToken: `chat-${Date.now()}`,
         }),
       });
+
+      if (res.status === 429) {
+        throw new Error("Chat rate limit exceeded. Please wait a minute before sending another message.");
+      }
 
       if (!res.ok) {
         throw new Error(`Server returned status ${res.status}`);

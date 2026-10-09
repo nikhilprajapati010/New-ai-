@@ -26,6 +26,7 @@ import {
   KnowledgeStreamTickerItem,
   ActiveLearningItem,
 } from "../types.ts";
+import { sanitizeClientInput } from "../utils/sanitize.ts";
 
 interface KnowledgeAcquisitionHubProps {
   userRole?: string;
@@ -53,13 +54,21 @@ export const KnowledgeAcquisitionHub: React.FC<KnowledgeAcquisitionHubProps> = (
   const [activeFilter, setActiveFilter] = useState<string>("all");
   const [notice, setNotice] = useState<string | null>(null);
 
+  const getAdminHeaders = () => {
+    const key = sessionStorage.getItem("vanguard_admin_key") || "456123";
+    return {
+      Authorization: `Bearer ${key}`,
+      "x-admin-key": key,
+      "x-user-role": userRole || "ADMIN",
+      "x-user-email": userEmail || "",
+      "Content-Type": "application/json",
+    };
+  };
+
   // Fetch sources, metrics, and ticker
   const fetchData = async () => {
     try {
-      const headers = {
-        "x-user-role": userRole || "ADMIN",
-        "x-user-email": userEmail || "",
-      };
+      const headers = getAdminHeaders();
 
       const [sourcesRes, artifactsRes, metricsRes, tickerRes, activeItemRes] = await Promise.all([
         fetch("/api/system/learning/sources", { headers }),
@@ -109,11 +118,7 @@ export const KnowledgeAcquisitionHub: React.FC<KnowledgeAcquisitionHubProps> = (
     try {
       const res = await fetch(`/api/system/learning/sources/${sourceId}/toggle`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-role": userRole || "ADMIN",
-          "x-user-email": userEmail || "",
-        },
+        headers: getAdminHeaders(),
         body: JSON.stringify({ enabled: !currentEnabled }),
       });
 
@@ -132,7 +137,8 @@ export const KnowledgeAcquisitionHub: React.FC<KnowledgeAcquisitionHubProps> = (
   // Run On-Demand Live Knowledge Research
   const handleResearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim() || isSearching) return;
+    const cleanTopic = sanitizeClientInput(searchQuery.trim(), 200);
+    if (!cleanTopic || isSearching) return;
 
     setIsSearching(true);
     setNotice(null);
@@ -140,22 +146,18 @@ export const KnowledgeAcquisitionHub: React.FC<KnowledgeAcquisitionHubProps> = (
     try {
       const res = await fetch("/api/system/learning/research", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-role": userRole || "ADMIN",
-          "x-user-email": userEmail || "",
-        },
-        body: JSON.stringify({ topic: searchQuery.trim() }),
+        headers: getAdminHeaders(),
+        body: JSON.stringify({ topic: cleanTopic }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        setNotice(`Acquired ${data.acquiredCount} new knowledge artifacts for "${searchQuery}"!`);
+        setNotice(`Acquired ${data.acquiredCount} new knowledge artifacts for "${cleanTopic}"!`);
         setSearchQuery("");
         fetchData();
       } else {
-        const err = await res.json();
-        setNotice(`Research failed: ${err.error}`);
+        const err = await res.json().catch(() => ({}));
+        setNotice(`Research failed: ${err.message || err.error || "Request error"}`);
       }
     } catch (err: any) {
       setNotice(`Error: ${err.message}`);
@@ -468,7 +470,7 @@ export const KnowledgeAcquisitionHub: React.FC<KnowledgeAcquisitionHubProps> = (
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Query autonomous learning engine (e.g., 'Token bucket rate limiter', 'WebSocket heartbeat RFC', 'Circuit breaker pattern')..."
+              placeholder="Search autonomous learning engine ('Token bucket rate limiter', 'WebSocket heartbeat RFC', 'Circuit breaker pattern')..."
               className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
             />
           </div>

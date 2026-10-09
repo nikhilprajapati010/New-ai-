@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { ShieldAlert, Key, ArrowRight, X, Lock, CheckCircle2, AlertCircle } from "lucide-react";
+import { sanitizeClientInput } from "../utils/sanitize.ts";
 
 interface AdminAuthModalProps {
   isOpen: boolean;
@@ -25,10 +26,10 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
     setError(null);
     setIsVerifying(true);
 
-    const trimmed = inputKey.trim();
+    const sanitizedKey = sanitizeClientInput(inputKey.trim(), 32);
 
     // Verify against hardcoded secret key '456123'
-    if (trimmed === ADMIN_SECRET_KEY) {
+    if (sanitizedKey === ADMIN_SECRET_KEY) {
       sessionStorage.setItem("vanguard_admin_key", ADMIN_SECRET_KEY);
       setTimeout(() => {
         setIsVerifying(false);
@@ -42,12 +43,15 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
       const res = await fetch("/api/system/auth/verify-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: trimmed }),
+        body: JSON.stringify({ key: sanitizedKey }),
       });
 
       if (res.ok) {
         sessionStorage.setItem("vanguard_admin_key", ADMIN_SECRET_KEY);
         onSuccess(ADMIN_SECRET_KEY);
+      } else if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.message || "Too many failed attempts. Security throttle active.");
       } else {
         setError("Invalid Admin Security Key. Access strictly denied.");
       }
@@ -100,7 +104,7 @@ export const AdminAuthModal: React.FC<AdminAuthModalProps> = ({
                   setInputKey(e.target.value);
                   if (error) setError(null);
                 }}
-                placeholder="Enter 6-digit key (e.g. 456123)"
+                placeholder="Enter 6-digit key (456123)"
                 autoFocus
                 className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-cyan-400 text-sm font-mono text-white placeholder-slate-600 focus:outline-none transition-colors"
               />

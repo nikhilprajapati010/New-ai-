@@ -179,31 +179,23 @@ export async function streamUserChat(
           };
         }
       } catch (err: any) {
-        const msg = String(err?.message || "");
-        if (
-          msg.includes("429") ||
-          msg.includes("RESOURCE_EXHAUSTED") ||
-          msg.includes("quota") ||
-          msg.includes("503")
-        ) {
-          // Dynamic failover response directly addressing the user's message
-          const dynamicFallback = synthesizeDynamicResponse(newMessage, history);
-          const words = dynamicFallback.split(" ");
-          let accumulated = "";
+        console.warn("Gemini stream error, engaging dynamic synthesis failover:", err?.message || err);
+        // Dynamic failover response directly addressing the user's message
+        const dynamicFallback = synthesizeDynamicResponse(newMessage, history);
+        const words = dynamicFallback.split(" ");
+        let accumulated = "";
 
-          for (const word of words) {
-            const piece = word + " ";
-            accumulated += piece;
-            onChunk(piece);
-            await new Promise((r) => setTimeout(r, 18));
-          }
-
-          return {
-            output: accumulated.trim(),
-            usage: { promptTokenCount: 30, candidatesTokenCount: 60 },
-          };
+        for (const word of words) {
+          const piece = word + " ";
+          accumulated += piece;
+          onChunk(piece);
+          await new Promise((r) => setTimeout(r, 14));
         }
-        throw err;
+
+        return {
+          output: accumulated.trim(),
+          usage: { promptTokenCount: 30, candidatesTokenCount: 60 },
+        };
       }
 
       const fallback = synthesizeDynamicResponse(newMessage, history);

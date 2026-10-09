@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { vanguardWebSocket } from "./websocketService.js";
+import { redactSecrets } from "./securityService.js";
 
 export interface FileNode {
   path: string;
@@ -38,12 +39,54 @@ export class FileSystemService {
     }
   }
 
+  private isForbiddenTarget(filePath: string): boolean {
+    const base = path.basename(filePath).toLowerCase();
+    // Block environment variables, keys, credentials, and configuration files
+    if (
+      base.startsWith(".env") ||
+      base.includes("firebase-applet-config") ||
+      base.includes("firebase-blueprint") ||
+      base.includes("firestore.rules") ||
+      base.endsWith(".key") ||
+      base.endsWith(".pem") ||
+      base.endsWith(".cert") ||
+      base.endsWith(".p12") ||
+      base.endsWith(".lock") ||
+      base.includes("securityservice") ||
+      filePath.includes(".vanguard_backups") ||
+      filePath.includes(".git") ||
+      filePath.includes("node_modules")
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   private resolveSafePath(relPath: string): string {
     const clean = relPath.replace(/^(\.\.[\/\\])+/, "").replace(/^\/+/, "");
     const absolute = path.resolve(this.baseDir, clean);
-    if (!absolute.startsWith(this.baseDir)) {
+
+    // Verify absolute path stays strictly inside baseDir
+    const relFromBase = path.relative(this.baseDir, absolute);
+    if (relFromBase.startsWith("..") || path.isAbsolute(relFromBase)) {
       throw new Error("Access Denied: Path escapes sandbox boundary.");
     }
+
+    // Verify it targets only /src or /server
+    const normalized = relFromBase.replace(/\\/g, "/");
+    const allowedPrefixes = ["src", "server"];
+    const isAllowedDir = allowedPrefixes.some(
+      (prefix) => normalized === prefix || normalized.startsWith(prefix + "/")
+    );
+
+    if (!isAllowedDir) {
+      throw new Error("Access Denied: File system operations are strictly restricted to /src and /server.");
+    }
+
+    if (this.isForbiddenTarget(absolute)) {
+      throw new Error("Access Denied: Protected system or credential file.");
+    }
+
     return absolute;
   }
 
@@ -104,7 +147,7 @@ export class FileSystemService {
   }
 
   /**
-   * Reads file content with safe path resolution
+   * Reads file content with safe path resolution and secret redaction
    */
   public readFile(relativePath: string): { path: string; content: string; lines: number; size: number } {
     const fullPath = this.resolveSafePath(relativePath);
@@ -116,7 +159,8 @@ export class FileSystemService {
       throw new Error(`Target is a directory, not a file: ${relativePath}`);
     }
 
-    const content = fs.readFileSync(fullPath, "utf-8");
+    const rawContent = fs.readFileSync(fullPath, "utf-8");
+    const content = redactSecrets(rawContent);
     return {
       path: relativePath,
       content,
@@ -130,6 +174,12 @@ export class FileSystemService {
    */
   public writeFile(relativePath: string, content: string): { success: boolean; path: string; bytesWritten: number } {
     const fullPath = this.resolveSafePath(relativePath);
+
+    const ext = path.extname(fullPath).toLowerCase();
+    const allowedExts = [".ts", ".tsx", ".css", ".json", ".js", ".mjs", ".svg", ".md"];
+    if (!allowedExts.includes(ext)) {
+      throw new Error(`Access Denied: Writing files with extension '${ext}' is disallowed.`);
+    }
 
     // Create automatic snapshot backup
     if (fs.existsSync(fullPath)) {
@@ -236,8 +286,10 @@ export class FileSystemService {
           const full = path.join(d, entry);
           const stat = fs.statSync(full);
           if (stat.isDirectory()) {
+            if (this.isForbiddenTarget(full)) return;
             walk(full);
           } else if (entry.endsWith(".ts") || entry.endsWith(".tsx") || entry.endsWith(".json")) {
+            if (this.isForbiddenTarget(full)) return;
             try {
               const content = fs.readFileSync(full, "utf-8");
               const lines = content.split("\n");
@@ -246,7 +298,7 @@ export class FileSystemService {
                   results.push({
                     path: path.relative(this.baseDir, full),
                     line: idx + 1,
-                    snippet: lineText.trim().substring(0, 120),
+                    snippet: redactSecrets(lineText.trim().substring(0, 120)),
                   });
                 }
               });

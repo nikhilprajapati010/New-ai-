@@ -854,6 +854,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLockSession })
           </button>
 
           <button
+            onClick={() => setActiveTab("fs")}
+            className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer shrink-0 ${
+              activeTab === "fs"
+                ? "border-cyan-400 text-white font-semibold"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <HardDrive className="w-3.5 h-3.5 text-amber-400" />
+            <span>Omniscient File System Explorer</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("terminal")}
             className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer shrink-0 ${
               activeTab === "terminal"
@@ -1030,7 +1042,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLockSession })
         />
       )}
 
-      {/* Tab 3: Live Stream Terminal (WebSocket powered) */}
+      {/* Tab 3: Omniscient File System Explorer (Direct /src and /server read/write) */}
+      {activeTab === "fs" && (
+        <FileSystemExplorer />
+      )}
+
+      {/* Tab 4: Live Stream Terminal (WebSocket powered) */}
       {activeTab === "terminal" && (
         <div className="rounded-xl border border-slate-800 bg-slate-950 font-mono text-xs overflow-hidden shadow-2xl">
           {/* Terminal Title Bar */}

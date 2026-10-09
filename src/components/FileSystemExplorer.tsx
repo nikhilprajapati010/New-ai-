@@ -82,9 +82,14 @@ export const FileSystemExplorer: React.FC = () => {
       if (res.ok) {
         setNotice(`Successfully saved ${selectedFile}`);
         setTimeout(() => setNotice(null), 3000);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setNotice(`Save failed: ${data.error || "Access Denied"}`);
+        setTimeout(() => setNotice(null), 4000);
       }
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      setNotice(`Error saving file: ${e.message || "Network error"}`);
+      setTimeout(() => setNotice(null), 4000);
     } finally {
       setIsSaving(false);
     }

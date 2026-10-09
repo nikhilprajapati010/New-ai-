@@ -12,35 +12,50 @@ import { autonomousLearningEngine, LearningSourceId } from "./learningEngine.js"
 import { selfDiagnosticService } from "./diagnosticService.js";
 import { fastCodeAuditService } from "./fastCodeAuditService.js";
 import { fileSystemService } from "./fileSystemService.js";
+import {
+  ADMIN_SECRET_KEY,
+  timingSafeCompare,
+  hashPassword,
+  verifyPassword,
+  sanitizeInputsMiddleware,
+  securityHeadersMiddleware,
+  authRateLimiter,
+  chatRateLimiter,
+  generalApiRateLimiter,
+  getCorsOptions,
+} from "./securityService.js";
 
+export { ADMIN_SECRET_KEY };
 export const apiApp = express();
 
-export const ADMIN_SECRET_KEY = "456123";
+// Turn off debug headers and enforce security perimeter
+apiApp.disable("x-powered-by");
+apiApp.use(cors(getCorsOptions()));
+apiApp.use(securityHeadersMiddleware);
+apiApp.use(express.json({ limit: "1mb" }));
+apiApp.use(sanitizeInputsMiddleware);
+apiApp.use("/api", generalApiRateLimiter.createMiddleware());
 
-apiApp.use(cors());
-apiApp.use(express.json());
-
-// Strict Admin Authentication Guard: Verifying Authorization: Bearer 456123
+// Strict Admin Authentication Guard: Verifying Authorization: Bearer 456123 via constant-time comparison
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers["authorization"] || "";
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  const headerKey = (req.headers["x-admin-key"] as string) || "";
-  const queryKey = (req.query?.adminKey as string) || "";
+  const headerKey = ((req.headers["x-admin-key"] as string) || "").trim();
 
-  // Strictly validate against the hardcoded secret key '456123'
-  if (
-    bearerToken === ADMIN_SECRET_KEY ||
-    headerKey === ADMIN_SECRET_KEY ||
-    queryKey === ADMIN_SECRET_KEY
-  ) {
+  // Strictly validate against the hardcoded secret key '456123' using constant-time check
+  const isAuthorizedBearer = Boolean(bearerToken && timingSafeCompare(bearerToken, ADMIN_SECRET_KEY));
+  const isAuthorizedHeader = Boolean(headerKey && timingSafeCompare(headerKey, ADMIN_SECRET_KEY));
+
+  if (isAuthorizedBearer || isAuthorizedHeader) {
     return next();
   }
 
-  // Also allow fallback if admin email is verified
-  const email = (req.headers["x-user-email"] as string) || req.body?.userEmail || "";
-  if (email.toLowerCase() === "nikhilprajapathi1@gmail.com" && (req.headers["x-user-role"] === "ADMIN" || req.body?.userRole === "ADMIN")) {
-    return next();
-  }
+  // Audit log failed admin access attempt for telemetry
+  vanguardWebSocket.broadcastLog({
+    level: "WARN",
+    source: "security-guard",
+    message: `[SECURITY AUDIT]: Blocked unauthorized admin access attempt on ${req.method} ${req.path}.`,
+  });
 
   return res.status(401).json({
     error: "Unauthorized: Invalid or missing Admin Security Key.",
@@ -52,7 +67,7 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 // --------------------------------------------------------------------------
 // 1. User Mode Chat API (UserService with Dynamic Model Router & SSE Streaming)
 // --------------------------------------------------------------------------
-apiApp.post("/api/chat/stream", async (req: Request, res: Response) => {
+apiApp.post("/api/chat/stream", chatRateLimiter.createMiddleware("Chat request threshold exceeded. Please wait a moment."), async (req: Request, res: Response) => {
   try {
     const { history = [], message, replayToken } = req.body;
     if (!message || typeof message !== "string") {
@@ -93,7 +108,7 @@ apiApp.post("/api/chat/stream", async (req: Request, res: Response) => {
   }
 });
 
-apiApp.post("/api/chat", async (req: Request, res: Response) => {
+apiApp.post("/api/chat", chatRateLimiter.createMiddleware("Chat request threshold exceeded. Please wait a moment."), async (req: Request, res: Response) => {
   try {
     const { history = [], message, replayToken } = req.body;
     if (!message || typeof message !== "string") {
@@ -123,7 +138,7 @@ apiApp.post("/api/chat", async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 // 2. Continuous CI/CD Webhook / Manual Trigger
 // --------------------------------------------------------------------------
-apiApp.post("/api/internal/hourly-trigger", async (req: Request, res: Response) => {
+apiApp.post("/api/internal/hourly-trigger", requireAdmin, async (req: Request, res: Response) => {
   try {
     if (systemState.getKillSwitch()) {
       vanguardWebSocket.broadcastLog({
@@ -275,7 +290,7 @@ apiApp.post("/api/system/kill-switch", requireAdmin, (req: Request, res: Respons
 // --------------------------------------------------------------------------
 // 5. Pending Updates Queue APIs (Admin PR Queue)
 // --------------------------------------------------------------------------
-apiApp.get("/api/system/updates", (_req: Request, res: Response) => {
+apiApp.get("/api/system/updates", requireAdmin, (_req: Request, res: Response) => {
   res.json({
     updates: systemState.getPendingUpdates(),
   });
@@ -312,7 +327,7 @@ apiApp.post("/api/system/updates/:id/action", requireAdmin, (req: Request, res: 
 // --------------------------------------------------------------------------
 // 5b. Auto-Deploy Policy Control APIs (Admin Only)
 // --------------------------------------------------------------------------
-apiApp.get("/api/system/policy", (_req: Request, res: Response) => {
+apiApp.get("/api/system/policy", requireAdmin, (_req: Request, res: Response) => {
   res.json({
     autoDeployPolicy: systemState.getAutoDeployPolicy(),
   });
@@ -457,7 +472,7 @@ apiApp.get("/api/system/learning/ticker", requireAdmin, (_req: Request, res: Res
   });
 });
 
-apiApp.get("/api/system/learning/active-item", (_req: Request, res: Response) => {
+apiApp.get("/api/system/learning/active-item", requireAdmin, (_req: Request, res: Response) => {
   res.json({
     activeLearningItem: autonomousLearningEngine.getActiveLearningItem(),
   });
@@ -535,20 +550,72 @@ apiApp.post("/api/system/fast-audit/simulate-flaw", requireAdmin, async (req: Re
 
 // --------------------------------------------------------------------------
 // 11. Admin Security Key Verification Endpoint (Hardcoded Secret: 456123)
+// Protected with strict rate limiting and constant-time equality check
 // --------------------------------------------------------------------------
-apiApp.post("/api/system/auth/verify-key", (req: Request, res: Response) => {
-  const { key } = req.body || {};
-  if (key === ADMIN_SECRET_KEY) {
-    return res.json({
-      success: true,
-      token: ADMIN_SECRET_KEY,
-      message: "Admin security key authenticated successfully. Session unlocked.",
+apiApp.post(
+  "/api/system/auth/verify-key",
+  authRateLimiter.createMiddleware("Authentication throttle triggered. Maximum 5 attempts per minute permitted."),
+  (req: Request, res: Response) => {
+    const { key } = req.body || {};
+    const keyStr = typeof key === "string" ? key.trim() : "";
+
+    if (timingSafeCompare(keyStr, ADMIN_SECRET_KEY)) {
+      vanguardWebSocket.broadcastLog({
+        level: "INFO",
+        source: "security-guard",
+        message: "[SECURITY AUDIT]: Admin authenticated with verified Security Key.",
+      });
+
+      return res.json({
+        success: true,
+        token: ADMIN_SECRET_KEY,
+        message: "Admin security key authenticated successfully. Session unlocked.",
+      });
+    }
+
+    vanguardWebSocket.broadcastLog({
+      level: "WARN",
+      source: "security-guard",
+      message: "[SECURITY AUDIT]: Failed Admin Security Key verification attempt.",
+    });
+
+    return res.status(401).json({
+      success: false,
+      error: "Invalid Admin Security Key. Access strictly denied.",
     });
   }
+);
 
-  return res.status(401).json({
-    success: false,
-    error: "Invalid Admin Security Key. Access strictly denied.",
+// --------------------------------------------------------------------------
+// 11b. Cryptographic Credential Hashing & Security Verification (Scrypt + Salt)
+// --------------------------------------------------------------------------
+apiApp.post("/api/system/auth/hash-credential", requireAdmin, (req: Request, res: Response) => {
+  const { credential } = req.body || {};
+  if (!credential || typeof credential !== "string") {
+    return res.status(400).json({ error: "Field 'credential' must be a non-empty string." });
+  }
+
+  const { hash, salt } = hashPassword(credential);
+  res.json({
+    success: true,
+    algorithm: "scrypt",
+    keyLength: 64,
+    salt,
+    hash,
+    message: "Credential securely hashed using Scrypt with 16-byte cryptographic salt.",
+  });
+});
+
+apiApp.post("/api/system/auth/verify-credential", (req: Request, res: Response) => {
+  const { credential, hash, salt } = req.body || {};
+  if (!credential || !hash || !salt) {
+    return res.status(400).json({ error: "Fields 'credential', 'hash', and 'salt' are required." });
+  }
+
+  const isValid = verifyPassword(credential, hash, salt);
+  res.json({
+    success: isValid,
+    verified: isValid,
   });
 });
 
@@ -610,13 +677,13 @@ apiApp.get("/api/system/fs/search", requireAdmin, (req: Request, res: Response) 
   }
 });
 
-// Centralized error handling middleware to prevent API crashes
+// Centralized error handling middleware with sanitized responses (No debug stack leaks)
 apiApp.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error("[Vanguard API Error Handler]:", err);
   if (!res.headersSent) {
     res.status(500).json({
-      error: "An internal server error occurred.",
-      message: err?.message || String(err),
+      error: "Internal server error",
+      message: "An unexpected error occurred. Request logged for security review.",
     });
   }
 });

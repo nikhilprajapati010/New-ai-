@@ -48,7 +48,7 @@ export function useVanguardWebSocket() {
     // Use current host and protocol dynamically
     const isHttps = window.location.protocol === "https:";
     const protocol = isHttps ? "wss:" : "ws:";
-    const host = window.location.host; // e.g. ais-dev-...run.app or localhost:3000
+    const host = window.location.host; // Host and port (ais-dev-...run.app or localhost:3000)
     const wsUrl = `${protocol}//${host}/ws/vanguard`;
 
     try {
