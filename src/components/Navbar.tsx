@@ -9,6 +9,8 @@ interface NavbarProps {
   killSwitch: boolean;
   activeModel?: ModelTierConfig | null;
   isModelLocked?: boolean;
+  adminAuthenticated?: boolean;
+  onLockAdmin?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,6 +19,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   killSwitch,
   activeModel,
   isModelLocked,
+  adminAuthenticated,
+  onLockAdmin,
 }) => {
   const { isAdmin, loginWithGoogle, logout, setSimulatedRole, firebaseUser } = useAuth();
 
@@ -85,6 +89,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right: Auth & Role */}
         <div className="flex items-center space-x-2 text-xs">
+          {adminAuthenticated && onLockAdmin && (
+            <button
+              onClick={onLockAdmin}
+              className="px-2 py-1 rounded text-[11px] font-mono bg-rose-950/40 text-rose-300 border border-rose-800/40 hover:bg-rose-900/50 transition-colors cursor-pointer flex items-center space-x-1"
+              title="Lock Admin Session (Key: 456123)"
+            >
+              <span>Lock Admin</span>
+            </button>
+          )}
+
           {/* Quick Role Toggle for Testing */}
           <button
             onClick={() => setSimulatedRole(isAdmin ? "USER" : "ADMIN")}

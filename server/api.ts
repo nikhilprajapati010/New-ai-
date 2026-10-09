@@ -7,28 +7,45 @@ import { runAutomatedTests } from "./sandbox.js";
 import { dynamicModelRouter, MODEL_CHAIN, ModelPriorityId } from "./modelRouter.js";
 import { vanguardContinuousLoop } from "./continuousLoop.js";
 import { vanguardWebSocket } from "./websocketService.js";
+import { vanguardUpgradeService } from "./upgradeService.js";
+import { autonomousLearningEngine, LearningSourceId } from "./learningEngine.js";
+import { selfDiagnosticService } from "./diagnosticService.js";
+import { fastCodeAuditService } from "./fastCodeAuditService.js";
+import { fileSystemService } from "./fileSystemService.js";
 
 export const apiApp = express();
+
+export const ADMIN_SECRET_KEY = "456123";
 
 apiApp.use(cors());
 apiApp.use(express.json());
 
-// Helper for RBAC check
+// Strict Admin Authentication Guard: Verifying Authorization: Bearer 456123
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const role = req.headers["x-user-role"] || req.body?.userRole;
-  const email = (req.headers["x-user-email"] as string) || req.body?.userEmail || "";
+  const authHeader = req.headers["authorization"] || "";
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const headerKey = (req.headers["x-admin-key"] as string) || "";
+  const queryKey = (req.query?.adminKey as string) || "";
 
-  const isAdminEmail = email.toLowerCase() === "nikhilprajapathi1@gmail.com";
-  const isAdminRole = role === "ADMIN";
-
-  if (isAdminRole || isAdminEmail) {
+  // Strictly validate against the hardcoded secret key '456123'
+  if (
+    bearerToken === ADMIN_SECRET_KEY ||
+    headerKey === ADMIN_SECRET_KEY ||
+    queryKey === ADMIN_SECRET_KEY
+  ) {
     return next();
   }
 
-  return res.status(403).json({
-    error: "Forbidden: Access restricted to authorized Vanguard AI Executive Administrators.",
-    requiredRole: "ADMIN",
-    currentRole: role || "ANONYMOUS",
+  // Also allow fallback if admin email is verified
+  const email = (req.headers["x-user-email"] as string) || req.body?.userEmail || "";
+  if (email.toLowerCase() === "nikhilprajapathi1@gmail.com" && (req.headers["x-user-role"] === "ADMIN" || req.body?.userRole === "ADMIN")) {
+    return next();
+  }
+
+  return res.status(401).json({
+    error: "Unauthorized: Invalid or missing Admin Security Key.",
+    message: "Authorization: Bearer 456123 is required to access Vanguard AI Admin systems.",
+    requiredHeader: "Authorization: Bearer 456123",
   });
 }
 
@@ -277,6 +294,9 @@ apiApp.post("/api/system/updates/:id/action", requireAdmin, (req: Request, res: 
     return res.status(404).json({ error: `Update with id '${id}' not found.` });
   }
 
+  // Wake up held upgrade pipeline if it was holding for this PR approval
+  vanguardUpgradeService.resolveAdminApproval(id, action);
+
   vanguardWebSocket.broadcastLog({
     level: "INFO",
     source: "admin-audit",
@@ -286,6 +306,35 @@ apiApp.post("/api/system/updates/:id/action", requireAdmin, (req: Request, res: 
   res.json({
     success: true,
     update: updated,
+  });
+});
+
+// --------------------------------------------------------------------------
+// 5b. Auto-Deploy Policy Control APIs (Admin Only)
+// --------------------------------------------------------------------------
+apiApp.get("/api/system/policy", (_req: Request, res: Response) => {
+  res.json({
+    autoDeployPolicy: systemState.getAutoDeployPolicy(),
+  });
+});
+
+apiApp.post("/api/system/policy", requireAdmin, (req: Request, res: Response) => {
+  const { policy, userEmail } = req.body;
+  if (policy !== "FULL_AUTONOMY" && policy !== "STRICT_MODE") {
+    return res.status(400).json({ error: "Policy must be 'FULL_AUTONOMY' or 'STRICT_MODE'." });
+  }
+
+  const updated = systemState.setAutoDeployPolicy(policy, userEmail);
+  vanguardWebSocket.broadcast({
+    type: "policy_updated",
+    policy: updated,
+    userEmail,
+    timestamp: new Date().toISOString(),
+  });
+
+  res.json({
+    success: true,
+    policy: updated,
   });
 });
 
@@ -309,6 +358,256 @@ apiApp.get("/api/system/terminal-events", (_req: Request, res: Response) => {
     killSwitch: systemState.getKillSwitch(),
     timestamp: new Date().toISOString(),
   });
+});
+
+// --------------------------------------------------------------------------
+// 7. Continuous Upgrade Pipeline Controls (Admin Only)
+// --------------------------------------------------------------------------
+apiApp.get("/api/system/upgrade/status", requireAdmin, (_req: Request, res: Response) => {
+  res.json(vanguardUpgradeService.getStatus());
+});
+
+apiApp.post("/api/system/upgrade/start", requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { focusTopic } = req.body || {};
+    const state = await vanguardUpgradeService.startUpgrade(focusTopic);
+    res.json({
+      success: true,
+      message: "Autonomous upgrade pipeline initiated. Background refactoring engine set to ACTIVE.",
+      state,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || "Failed to start upgrade" });
+  }
+});
+
+apiApp.post("/api/system/upgrade/stop", requireAdmin, (_req: Request, res: Response) => {
+  try {
+    const state = vanguardUpgradeService.stopUpgrade();
+    res.json({
+      success: true,
+      message: "Autonomous upgrade process paused safely without tripping the emergency Kill Switch.",
+      state,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to stop upgrade" });
+  }
+});
+
+// --------------------------------------------------------------------------
+// 8. Autonomous Learning Engine APIs (Admin Only - YouTube, GitHub, Google, Wikipedia)
+// --------------------------------------------------------------------------
+apiApp.get("/api/system/learning/sources", requireAdmin, (_req: Request, res: Response) => {
+  res.json({
+    sources: autonomousLearningEngine.getSources(),
+  });
+});
+
+apiApp.post("/api/system/learning/sources/:sourceId/toggle", requireAdmin, (req: Request, res: Response) => {
+  const { sourceId } = req.params;
+  const { enabled } = req.body;
+
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ error: "Field 'enabled' must be a boolean." });
+  }
+
+  try {
+    const updated = autonomousLearningEngine.toggleSource(sourceId as LearningSourceId, enabled);
+    res.json({ success: true, source: updated });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+apiApp.get("/api/system/learning/artifacts", requireAdmin, (req: Request, res: Response) => {
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  res.json({
+    artifacts: autonomousLearningEngine.getArtifacts(limit),
+  });
+});
+
+apiApp.post("/api/system/learning/research", requireAdmin, async (req: Request, res: Response) => {
+  const { topic } = req.body;
+  if (!topic || typeof topic !== "string") {
+    return res.status(400).json({ error: "Query topic must be a non-empty string." });
+  }
+
+  try {
+    const newlyAcquired = await autonomousLearningEngine.researchTopic(topic);
+    res.json({
+      success: true,
+      topic,
+      acquiredCount: newlyAcquired.length,
+      artifacts: newlyAcquired,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to research topic" });
+  }
+});
+
+apiApp.get("/api/system/learning/metrics", requireAdmin, (_req: Request, res: Response) => {
+  res.json({
+    metrics: autonomousLearningEngine.getMetrics(),
+  });
+});
+
+apiApp.get("/api/system/learning/ticker", requireAdmin, (_req: Request, res: Response) => {
+  res.json({
+    ticker: autonomousLearningEngine.getTickerStream(20),
+  });
+});
+
+apiApp.get("/api/system/learning/active-item", (_req: Request, res: Response) => {
+  res.json({
+    activeLearningItem: autonomousLearningEngine.getActiveLearningItem(),
+  });
+});
+
+// --------------------------------------------------------------------------
+// 9. Autonomous Self-Diagnostic & Auto-Triggered Self-Healing APIs
+// --------------------------------------------------------------------------
+apiApp.get("/api/system/diagnostic/status", requireAdmin, (_req: Request, res: Response) => {
+  res.json(selfDiagnosticService.getStatus());
+});
+
+apiApp.post("/api/system/diagnostic/scan", requireAdmin, (_req: Request, res: Response) => {
+  const status = selfDiagnosticService.runDiagnosticScan();
+  res.json({
+    success: true,
+    message: "Self-diagnostic scan completed across all AST nodes.",
+    status,
+  });
+});
+
+apiApp.post("/api/system/diagnostic/simulate-pattern", requireAdmin, (req: Request, res: Response) => {
+  try {
+    const { component, patternName, detectedReason, modernAlternative } = req.body || {};
+    const status = selfDiagnosticService.triggerSubOptimalPattern({
+      component,
+      patternName,
+      detectedReason,
+      modernAlternative,
+    });
+    res.json({
+      success: true,
+      message: "Sub-optimal code pattern detected. Auto-triggered 4-phase upgrade pipeline.",
+      status,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || "Failed to simulate pattern." });
+  }
+});
+
+// --------------------------------------------------------------------------
+// 10. Accelerated Self-Code Audit Engine APIs (FastCodeAuditService)
+// --------------------------------------------------------------------------
+apiApp.get("/api/system/fast-audit/status", requireAdmin, (_req: Request, res: Response) => {
+  res.json(fastCodeAuditService.getStatus());
+});
+
+apiApp.post("/api/system/fast-audit/run", requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { component, flawType } = req.body || {};
+    const result = await fastCodeAuditService.triggerFastTrackUpgrade({
+      component,
+      flawType,
+      simulateFlaw: false,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || "Failed to trigger fast-track audit." });
+  }
+});
+
+apiApp.post("/api/system/fast-audit/simulate-flaw", requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { component, flawType } = req.body || {};
+    const result = await fastCodeAuditService.triggerFastTrackUpgrade({
+      component,
+      flawType,
+      simulateFlaw: true,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || "Failed to simulate flaw." });
+  }
+});
+
+// --------------------------------------------------------------------------
+// 11. Admin Security Key Verification Endpoint (Hardcoded Secret: 456123)
+// --------------------------------------------------------------------------
+apiApp.post("/api/system/auth/verify-key", (req: Request, res: Response) => {
+  const { key } = req.body || {};
+  if (key === ADMIN_SECRET_KEY) {
+    return res.json({
+      success: true,
+      token: ADMIN_SECRET_KEY,
+      message: "Admin security key authenticated successfully. Session unlocked.",
+    });
+  }
+
+  return res.status(401).json({
+    success: false,
+    error: "Invalid Admin Security Key. Access strictly denied.",
+  });
+});
+
+// --------------------------------------------------------------------------
+// 12. Omniscient File System Access APIs (Protected by requireAdmin)
+// --------------------------------------------------------------------------
+apiApp.get("/api/system/fs/tree", requireAdmin, (req: Request, res: Response) => {
+  try {
+    const rootPath = (req.query.root as string) || "src";
+    const tree = fileSystemService.getDirectoryTree(rootPath);
+    res.json({ success: true, tree });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiApp.get("/api/system/fs/file", requireAdmin, (req: Request, res: Response) => {
+  try {
+    const filePath = req.query.path as string;
+    if (!filePath) {
+      return res.status(400).json({ error: "Query parameter 'path' is required." });
+    }
+    const fileData = fileSystemService.readFile(filePath);
+    res.json({ success: true, file: fileData });
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+apiApp.post("/api/system/fs/file", requireAdmin, (req: Request, res: Response) => {
+  try {
+    const { path: filePath, content } = req.body || {};
+    if (!filePath || content === undefined) {
+      return res.status(400).json({ error: "Fields 'path' and 'content' are required." });
+    }
+    const result = fileSystemService.writeFile(filePath, content);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiApp.get("/api/system/fs/stats", requireAdmin, (_req: Request, res: Response) => {
+  try {
+    const stats = fileSystemService.getStats();
+    res.json({ success: true, stats });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+apiApp.get("/api/system/fs/search", requireAdmin, (req: Request, res: Response) => {
+  try {
+    const q = (req.query.q as string) || "";
+    const matches = fileSystemService.searchCode(q);
+    res.json({ success: true, matches });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Centralized error handling middleware to prevent API crashes

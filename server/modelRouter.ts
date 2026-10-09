@@ -17,21 +17,21 @@ export const MODEL_CHAIN: ModelTierConfig[] = [
     id: "gemini-1.5-pro",
     name: "Gemini 1.5 Pro",
     priority: 1,
-    apiModel: "gemini-3.8-flash", // maps to reliable live model
+    apiModel: "gemini-2.5-pro",
     description: "High-reasoning primary model for architectural code synthesis",
   },
   {
     id: "gemini-1.5-flash",
     name: "Gemini 1.5 Flash",
     priority: 2,
-    apiModel: "gemini-3.8-flash",
+    apiModel: "gemini-2.5-flash",
     description: "Fast high-throughput fallback model",
   },
   {
     id: "gemini-1.5-flash-8b",
     name: "Gemini 1.5 Flash 8B",
     priority: 3,
-    apiModel: "gemini-3.1-flash-lite",
+    apiModel: "gemini-2.5-flash-lite",
     description: "Lightweight fallback model for maximum resilience",
   },
 ];

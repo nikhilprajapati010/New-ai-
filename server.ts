@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import http from "http";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { apiApp } from "./server/api.js";
@@ -12,16 +13,42 @@ dotenv.config();
 // Global Exception Handlers to Prevent Process Termination / Crash Loops
 process.on("uncaughtException", (error: Error) => {
   console.error("[Vanguard Server Uncaught Exception]:", error);
-  // Log and keep process alive to preserve server uptime
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
   console.error("[Vanguard Server Unhandled Rejection]:", reason);
-  // Log and keep process alive to preserve server uptime
 });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Accurately resolve the compiled client dist directory regardless of execution context:
+ * - When running under tsx in dev/prod: __dirname is the project root.
+ * - When running bundled dist-server/server.js: __dirname is <root>/dist-server.
+ */
+function resolveClientDist(): string {
+  const candidates = [
+    path.resolve(__dirname, "../dist"), // Bundled dist-server location
+    path.resolve(process.cwd(), "dist"), // Root execution
+    path.resolve(__dirname, "dist"),
+    path.resolve(__dirname, "../../dist"),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "index.html"))) {
+      return candidate;
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return path.resolve(process.cwd(), "dist");
+}
 
 async function startServer() {
   const app = express();
@@ -42,18 +69,41 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Production: serve built static client assets
-    const distPath = path.resolve(__dirname, "dist");
+    const distPath = resolveClientDist();
+    const indexPath = path.join(distPath, "index.html");
+
+    if (!fs.existsSync(indexPath)) {
+      console.error(
+        `[Vanguard AI FATAL ERROR]: Production client assets NOT found!\n` +
+        `Checked path: ${indexPath}\n` +
+        `Current working directory: ${process.cwd()}\n` +
+        `__dirname: ${__dirname}\n` +
+        `Please ensure 'npm run build' has compiled the frontend into 'dist/' before starting the production server.`
+      );
+    } else {
+      console.log(`[Vanguard AI Production]: Serving client static assets from ${distPath}`);
+    }
+
     app.use(express.static(distPath));
 
     app.get("*", (req: Request, res: Response, next: NextFunction) => {
       if (req.path.startsWith("/api/") || req.path.startsWith("/ws/")) {
         return next();
       }
-      res.sendFile(path.join(distPath, "index.html"), (err) => {
-        if (err) {
-          res.status(404).send("Vanguard AI: Client assets not found.");
-        }
-      });
+
+      if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+      }
+
+      console.error(`[Vanguard AI Production Error]: Cannot serve ${req.url} - index.html missing at ${indexPath}`);
+      res.status(500).send(
+        `<!DOCTYPE html><html><head><title>Vanguard AI - Build Error</title></head>` +
+        `<body style="font-family:sans-serif;padding:2rem;background:#090d16;color:#e2e8f0;">` +
+        `<h2 style="color:#f87171;">Vanguard AI: Client assets not found</h2>` +
+        `<p>The production server could not find the compiled client bundle at <code>${indexPath}</code>.</p>` +
+        `<p>Ensure <code>npm run build</code> was executed during the deployment build phase.</p>` +
+        `</body></html>`
+      );
     });
   }
 
@@ -69,9 +119,6 @@ async function startServer() {
 
   server.on("error", (err: NodeJS.ErrnoException) => {
     console.error("[Vanguard HTTP Server Error]:", err);
-    if (err.code === "EADDRINUSE") {
-      console.error(`Port ${PORT} is currently in use. Retrying in 1s...`);
-    }
   });
 
   // Attach persistent WebSocket streaming server

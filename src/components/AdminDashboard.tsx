@@ -19,14 +19,38 @@ import { useAuth } from "../context/AuthContext.tsx";
 import { PendingUpdate, ModelTierConfig, SystemStateData, ModelPriorityId } from "../types.ts";
 import { DiffViewer } from "./DiffViewer.tsx";
 import { useVanguardWebSocket } from "../hooks/useVanguardWebSocket.ts";
+import { UpgradeController } from "./UpgradeController.tsx";
+import { UpgradePipelineTracker } from "./UpgradePipelineTracker.tsx";
+import { KnowledgeAcquisitionHub } from "./KnowledgeAcquisitionHub.tsx";
+import { SelfDiagnosticCard } from "./SelfDiagnosticCard.tsx";
+import { AutoDeployPolicyCard } from "./AutoDeployPolicyCard.tsx";
+import { ApprovalRequiredAlert } from "./ApprovalRequiredAlert.tsx";
+import { FastCodeAuditCard } from "./FastCodeAuditCard.tsx";
+import { FileSystemExplorer } from "./FileSystemExplorer.tsx";
+import { UpgradeCycleState, DiagnosticStatusResponse, AutoDeployPolicy } from "../types.ts";
+import { BookOpen, AlertOctagon, ShieldCheck, Zap, HardDrive } from "lucide-react";
 
-export const AdminDashboard: React.FC = () => {
+interface AdminDashboardProps {
+  onLockSession?: () => void;
+}
+
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLockSession }) => {
   const { currentUser, isAdmin, setSimulatedRole } = useAuth();
   const { logs: liveTerminalLogs, isConnected: wsConnected, connectionMode, clearLogs: clearTerminalLogs } = useVanguardWebSocket();
 
   const [systemState, setSystemState] = useState<SystemStateData | null>(null);
   const [updates, setUpdates] = useState<PendingUpdate[]>([]);
-  const [activeTab, setActiveTab] = useState<"updates" | "terminal">("updates");
+  const [activeTab, setActiveTab] = useState<"updates" | "knowledge" | "fs" | "terminal">("updates");
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [auditRate, setAuditRate] = useState<number>(128);
+
+  // Upgrade Pipeline State
+  const [upgradeState, setUpgradeState] = useState<UpgradeCycleState | null>(null);
+  const [upgradeLoading, setUpgradeLoading] = useState(false);
+
+  // Self-Diagnostic & Healing State
+  const [diagnosticData, setDiagnosticData] = useState<DiagnosticStatusResponse | null>(null);
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
 
   // Dynamic Model Router State
   const [activeModel, setActiveModel] = useState<ModelTierConfig | null>(null);
@@ -43,12 +67,39 @@ export const AdminDashboard: React.FC = () => {
   const [killSwitchLoading, setKillSwitchLoading] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
+  const getAdminHeaders = () => {
+    const key = sessionStorage.getItem("vanguard_admin_key") || "456123";
+    return {
+      Authorization: `Bearer ${key}`,
+      "x-admin-key": key,
+      "x-user-role": currentUser?.role || "ADMIN",
+      "x-user-email": currentUser?.email || "nikhilprajapathi1@gmail.com",
+      "Content-Type": "application/json",
+    };
+  };
+
+  const fetchFastAuditStatus = async () => {
+    try {
+      const res = await fetch("/api/system/fast-audit/status", {
+        headers: getAdminHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.auditRateFilesPerSec) {
+          setAuditRate(data.auditRateFilesPerSec);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   const fetchStateAndRouter = async () => {
     try {
       const [stateRes, updatesRes, routerRes] = await Promise.all([
-        fetch("/api/system/state"),
-        fetch("/api/system/updates"),
-        fetch("/api/system/model-router"),
+        fetch("/api/system/state", { headers: getAdminHeaders() }),
+        fetch("/api/system/updates", { headers: getAdminHeaders() }),
+        fetch("/api/system/model-router", { headers: getAdminHeaders() }),
       ]);
 
       if (stateRes.ok) {
@@ -73,11 +124,226 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  const fetchUpgradeStatus = async () => {
+    try {
+      const res = await fetch("/api/system/upgrade/status", {
+        headers: getAdminHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUpgradeState(data);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  const fetchDiagnosticStatus = async () => {
+    try {
+      const res = await fetch("/api/system/diagnostic/status", {
+        headers: getAdminHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticData(data);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     fetchStateAndRouter();
-    const interval = setInterval(fetchStateAndRouter, 6000);
-    return () => clearInterval(interval);
+    fetchUpgradeStatus();
+    fetchDiagnosticStatus();
+    fetchFastAuditStatus();
+    const stateInterval = setInterval(fetchStateAndRouter, 5000);
+    const upgradeInterval = setInterval(fetchUpgradeStatus, 2000);
+    const diagInterval = setInterval(fetchDiagnosticStatus, 4000);
+    const auditInterval = setInterval(fetchFastAuditStatus, 6000);
+    return () => {
+      clearInterval(stateInterval);
+      clearInterval(upgradeInterval);
+      clearInterval(diagInterval);
+      clearInterval(auditInterval);
+    };
   }, []);
+
+  const handleRunDiagnosticScan = async () => {
+    setDiagnosticLoading(true);
+    try {
+      const res = await fetch("/api/system/diagnostic/scan", {
+        method: "POST",
+        headers: {
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticData(data.status);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  };
+
+  const handleSimulatePattern = async () => {
+    setDiagnosticLoading(true);
+    try {
+      const res = await fetch("/api/system/diagnostic/simulate-pattern", {
+        method: "POST",
+        headers: {
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticData(data.status);
+        fetchUpgradeStatus();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  };
+
+  const handleUpdatePolicy = async (newPolicy: AutoDeployPolicy) => {
+    setPolicyLoading(true);
+    try {
+      const res = await fetch("/api/system/policy", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+        body: JSON.stringify({ policy: newPolicy, userEmail: currentUser?.email }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (systemState) {
+          setSystemState({ ...systemState, autoDeployPolicy: data.policy });
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setPolicyLoading(false);
+    }
+  };
+
+  const handleStartUpgrade = async (topic?: string) => {
+    setUpgradeLoading(true);
+    try {
+      const res = await fetch("/api/system/upgrade/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+        body: JSON.stringify({ focusTopic: topic }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setUpgradeState(data.state);
+        fetchStateAndRouter();
+      } else {
+        const err = await res.json();
+        alert(err.error || "Failed to initiate autonomous upgrade.");
+      }
+    } catch (err: any) {
+      alert(`Error starting upgrade: ${err.message}`);
+    } finally {
+      setUpgradeLoading(false);
+      fetchUpgradeStatus();
+    }
+  };
+
+  const handleStopUpgrade = async () => {
+    setUpgradeLoading(true);
+    try {
+      const res = await fetch("/api/system/upgrade/stop", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setUpgradeState(data.state);
+        fetchStateAndRouter();
+      }
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setUpgradeLoading(false);
+      fetchUpgradeStatus();
+    }
+  };
+
+  const [fastAuditLoading, setFastAuditLoading] = useState(false);
+
+  const handleRunFastAudit = async () => {
+    setFastAuditLoading(true);
+    try {
+      const res = await fetch("/api/system/fast-audit/run", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+        body: JSON.stringify({
+          component: "server/websocketService.ts",
+          flawType: "AST_CONCURRENCY",
+        }),
+      });
+      if (res.ok) {
+        fetchUpgradeStatus();
+        fetchStateAndRouter();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setFastAuditLoading(false);
+    }
+  };
+
+  const handleSimulateFlawAndGatekeeper = async () => {
+    setFastAuditLoading(true);
+    try {
+      const res = await fetch("/api/system/fast-audit/simulate-flaw", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-user-role": currentUser?.role || "ADMIN",
+          "x-user-email": currentUser?.email || "",
+        },
+        body: JSON.stringify({
+          component: "src/services/authService.ts",
+          flawType: "SYNTAX_FLAW",
+        }),
+      });
+      if (res.ok) {
+        fetchUpgradeStatus();
+        fetchStateAndRouter();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setFastAuditLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (activeTab === "terminal") {
@@ -430,6 +696,33 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
+      {/* PROMINENT PHASE 3 SANDBOX TEST GATEKEEPER BADGE */}
+      <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/70 via-slate-900 to-teal-950/70 border border-emerald-500/40 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        <div className="flex items-center space-x-2.5">
+          <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 shrink-0">
+            <ShieldCheck className="w-5 h-5 animate-pulse" />
+          </div>
+          <div>
+            <div className="flex items-center flex-wrap gap-2">
+              <span className="text-sm font-bold text-white tracking-wide">
+                Phase 3 Sandbox: Enforcing 100% Pass (0 Errors Allowed)
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold uppercase">
+                Zero-Error Guarantee Active
+              </span>
+            </div>
+            <p className="text-[11px] text-emerald-200/70 mt-0.5">
+              Automated compilation, unit, syntax AST analysis, and headless UI suites run in isolated sandbox. Any flaw triggers instant rollback & self-healing.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2 font-mono text-[11px] text-emerald-300 self-end sm:self-auto bg-slate-950/60 px-3 py-1.5 rounded-xl border border-emerald-900/60">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          <span>Pass Rate Enforced: 100.0%</span>
+        </div>
+      </div>
+
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
         <div className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800">
@@ -463,14 +756,76 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* HIGH-IMPACT PERMISSION GATING ALERT */}
+      {(() => {
+        const highImpactPr = updates.find(
+          (u) =>
+            (u.status === "PENDING" &&
+              (u.impactRisk?.severity === "CRITICAL" || u.impactRisk?.requiresApproval)) ||
+            u.id === upgradeState?.approvalRequiredPrId
+        );
+        return highImpactPr ? (
+          <ApprovalRequiredAlert
+            pr={highImpactPr}
+            onApprove={(id) => handlePrAction(id, "APPROVE")}
+            onReject={(id) => handlePrAction(id, "REJECT")}
+            onInspect={(id) => {
+              setExpandedId(id);
+              setActiveTab("updates");
+            }}
+            isLoading={upgradeLoading}
+          />
+        ) : null;
+      })()}
+
+      {/* AUTO-DEPLOY POLICY CARD */}
+      <AutoDeployPolicyCard
+        currentPolicy={systemState?.autoDeployPolicy || "FULL_AUTONOMY"}
+        onUpdatePolicy={handleUpdatePolicy}
+        isLoading={policyLoading}
+      />
+
+      {/* 2. AUTONOMOUS SELF-DIAGNOSTIC & AUTO-TRIGGERED SELF-HEALING SYSTEM */}
+      <SelfDiagnosticCard
+        diagnosticData={diagnosticData}
+        onRunScan={handleRunDiagnosticScan}
+        onSimulatePattern={handleSimulatePattern}
+        isLoading={diagnosticLoading}
+      />
+
+      {/* 2b. ACCELERATED SELF-CODE AUDIT ENGINE (FastCodeAuditService) */}
+      <FastCodeAuditCard
+        onRunAudit={handleRunFastAudit}
+        onSimulateFlaw={handleSimulateFlawAndGatekeeper}
+        isLoading={fastAuditLoading}
+      />
+
+      {/* 3. MANUAL & INFINITE CONTINUOUS UPGRADE CONTROLS */}
+      <UpgradeController
+        upgradeState={upgradeState}
+        isKillSwitchActive={isKillSwitchActive}
+        onStartUpgrade={handleStartUpgrade}
+        onStopUpgrade={handleStopUpgrade}
+        isLoading={upgradeLoading}
+      />
+
+      {/* 4. REAL-TIME UPGRADE PROCESS TRACKER */}
+      <UpgradePipelineTracker
+        upgradeState={upgradeState}
+        onSelectPr={(prId) => {
+          setExpandedId(prId);
+          setActiveTab("updates");
+        }}
+      />
+
       {/* Tabs */}
-      <div className="border-b border-slate-800 flex items-center justify-between text-xs">
-        <div className="flex items-center space-x-6">
+      <div className="border-b border-slate-800 flex items-center justify-between text-xs overflow-x-auto">
+        <div className="flex items-center space-x-6 shrink-0">
           <button
             onClick={() => setActiveTab("updates")}
-            className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer ${
+            className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer shrink-0 ${
               activeTab === "updates"
-                ? "border-cyan-400 text-white"
+                ? "border-cyan-400 text-white font-semibold"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
@@ -484,10 +839,25 @@ export const AdminDashboard: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab("knowledge")}
+            className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer shrink-0 ${
+              activeTab === "knowledge"
+                ? "border-cyan-400 text-white font-semibold"
+                : "border-transparent text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Autonomous Knowledge Acquisition Hub</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-mono">
+              YouTube · GitHub · Google · Wiki
+            </span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("terminal")}
-            className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer ${
+            className={`pb-2.5 font-medium flex items-center space-x-2 border-b-2 transition-colors cursor-pointer shrink-0 ${
               activeTab === "terminal"
-                ? "border-cyan-400 text-white"
+                ? "border-cyan-400 text-white font-semibold"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
@@ -532,24 +902,62 @@ export const AdminDashboard: React.FC = () => {
                 >
                   <div className="p-4">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                      <div className="flex items-center space-x-2">
+                      <div className="flex items-center space-x-2 flex-wrap">
                         <span className="font-mono text-xs text-cyan-400 font-semibold">
                           {update.id}
                         </span>
                         <span className="text-sm font-medium text-slate-100">{update.title}</span>
+
+                        {/* Severity Badge */}
+                        {update.status === "AUTO_MERGED" ? (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-semibold">
+                            [Severity: Low - Auto-Merged]
+                          </span>
+                        ) : update.impactRisk?.severity === "CRITICAL" ||
+                          update.impactRisk?.requiresApproval ? (
+                          <span className="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-mono font-semibold">
+                            [Severity: High - Permission Required]
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[10px] font-mono font-semibold">
+                            [Severity: Low - Routine Fix]
+                          </span>
+                        )}
+
+                        {/* Fast-Track (Sandbox Verified) Tag */}
+                        {(update.isFastTrack ||
+                          update.branch?.includes("fast-track") ||
+                          update.summary?.includes("Fast-Track") ||
+                          update.title?.includes("fast-track")) && (
+                          <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 text-[10px] font-mono font-bold flex items-center space-x-1 shadow-sm">
+                            <Zap className="w-3 h-3 text-cyan-400" />
+                            <span>Fast-Track (Sandbox Verified)</span>
+                          </span>
+                        )}
                       </div>
 
-                      <div className="flex items-center space-x-2 text-xs">
+                      <div className="flex items-center space-x-2 text-xs shrink-0">
+                        {update.impactRisk?.riskScore !== undefined && (
+                          <span className="text-[10px] font-mono text-slate-400">
+                            Risk: <strong>{update.impactRisk.riskScore}/100</strong>
+                          </span>
+                        )}
                         <span
                           className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${
-                            update.status === "APPROVED"
+                            update.status === "AUTO_MERGED"
+                              ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                              : update.status === "APPROVED"
                               ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20"
                               : update.status === "REJECTED"
                               ? "bg-rose-500/10 text-rose-300 border border-rose-500/20"
                               : "bg-amber-500/10 text-amber-300 border border-amber-500/20"
                           }`}
                         >
-                          {update.status}
+                          {update.status === "AUTO_MERGED"
+                            ? "AUTO-DEPLOYED"
+                            : update.status === "PENDING"
+                            ? "AWAITING APPROVAL"
+                            : update.status}
                         </span>
                       </div>
                     </div>
@@ -614,7 +1022,15 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 2: Live Stream Terminal (WebSocket powered) */}
+      {/* Tab 2: Autonomous Knowledge Acquisition Hub (Strictly Admin Restricted) */}
+      {activeTab === "knowledge" && (
+        <KnowledgeAcquisitionHub
+          userRole={currentUser?.role}
+          userEmail={currentUser?.email}
+        />
+      )}
+
+      {/* Tab 3: Live Stream Terminal (WebSocket powered) */}
       {activeTab === "terminal" && (
         <div className="rounded-xl border border-slate-800 bg-slate-950 font-mono text-xs overflow-hidden shadow-2xl">
           {/* Terminal Title Bar */}

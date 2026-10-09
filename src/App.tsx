@@ -3,6 +3,7 @@ import { AuthProvider } from "./context/AuthContext.tsx";
 import { Navbar } from "./components/Navbar.tsx";
 import { UserChat } from "./components/UserChat.tsx";
 import { AdminDashboard } from "./components/AdminDashboard.tsx";
+import { AdminAuthModal, ADMIN_SECRET_KEY } from "./components/AdminAuthModal.tsx";
 import { ModelTierConfig } from "./types.ts";
 
 export default function App() {
@@ -10,6 +11,10 @@ export default function App() {
   const [killSwitch, setKillSwitch] = useState<boolean>(false);
   const [activeModel, setActiveModel] = useState<ModelTierConfig | null>(null);
   const [isModelLocked, setIsModelLocked] = useState<boolean>(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+  const [adminAuthenticated, setAdminAuthenticated] = useState<boolean>(() => {
+    return typeof window !== "undefined" && sessionStorage.getItem("vanguard_admin_key") === ADMIN_SECRET_KEY;
+  });
 
   // Poll system state periodically to keep kill switch and model indicator in sync
   useEffect(() => {
@@ -41,16 +46,44 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const handleSelectTier = (tier: "user" | "admin") => {
+    if (tier === "admin") {
+      const storedKey = sessionStorage.getItem("vanguard_admin_key");
+      if (storedKey === ADMIN_SECRET_KEY || adminAuthenticated) {
+        setCurrentTier("admin");
+      } else {
+        setIsAdminModalOpen(true);
+      }
+    } else {
+      setCurrentTier("user");
+    }
+  };
+
+  const handleAdminAuthSuccess = (key: string) => {
+    sessionStorage.setItem("vanguard_admin_key", key);
+    setAdminAuthenticated(true);
+    setCurrentTier("admin");
+    setIsAdminModalOpen(false);
+  };
+
+  const handleLockAdmin = () => {
+    sessionStorage.removeItem("vanguard_admin_key");
+    setAdminAuthenticated(false);
+    setCurrentTier("user");
+  };
+
   return (
     <AuthProvider>
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
         {/* Navigation Bar */}
         <Navbar
           currentTier={currentTier}
-          onSelectTier={setCurrentTier}
+          onSelectTier={handleSelectTier}
           killSwitch={killSwitch}
           activeModel={activeModel}
           isModelLocked={isModelLocked}
+          adminAuthenticated={adminAuthenticated}
+          onLockAdmin={handleLockAdmin}
         />
 
         {/* Main Content Area */}
@@ -58,9 +91,16 @@ export default function App() {
           {currentTier === "user" ? (
             <UserChat />
           ) : (
-            <AdminDashboard />
+            <AdminDashboard onLockSession={handleLockAdmin} />
           )}
         </main>
+
+        {/* Strict Admin Authentication Security Modal */}
+        <AdminAuthModal
+          isOpen={isAdminModalOpen}
+          onClose={() => setIsAdminModalOpen(false)}
+          onSuccess={handleAdminAuthSuccess}
+        />
       </div>
     </AuthProvider>
   );

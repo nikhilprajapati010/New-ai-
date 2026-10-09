@@ -1,5 +1,17 @@
 import { AutomatedTestResult } from "./sandbox.js";
 
+export type AutoDeployPolicy = "FULL_AUTONOMY" | "STRICT_MODE";
+
+export interface ImpactRiskAssessment {
+  severity: "ROUTINE" | "CRITICAL";
+  riskLevel: "LOW" | "HIGH";
+  riskScore: number;
+  category: "BUG_FIX" | "PERFORMANCE" | "SECURITY" | "DATABASE_SCHEMA" | "API_BREAKING" | "DEPENDENCIES" | "REFACTOR";
+  reasons: string[];
+  requiresApproval: boolean;
+  autoDeployEligible: boolean;
+}
+
 export interface PendingUpdateRecord {
   id: string;
   title: string;
@@ -9,11 +21,14 @@ export interface PendingUpdateRecord {
   diff: string;
   additions: number;
   deletions: number;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "AUTO_MERGED";
   testResults: AutomatedTestResult;
   createdAt: string;
   reviewedBy?: string;
   reviewedAt?: string;
+  impactRisk?: ImpactRiskAssessment;
+  isFastTrack?: boolean;
+  isSandboxVerified?: boolean;
 }
 
 export interface TelemetryLogRecord {
@@ -28,6 +43,7 @@ export interface TelemetryLogRecord {
 export interface SystemStateData {
   killSwitch: boolean;
   autonomousLoopActive: boolean;
+  autoDeployPolicy: AutoDeployPolicy;
   lastHourlyTriggerAt: string | null;
   totalTriggersRun: number;
   tokensUsage: {
@@ -42,6 +58,7 @@ export interface SystemStateData {
 class SystemStateManager {
   private killSwitch: boolean = false;
   private autonomousLoopActive: boolean = true;
+  private autoDeployPolicy: AutoDeployPolicy = "FULL_AUTONOMY";
   private lastHourlyTriggerAt: string | null = new Date(Date.now() - 32 * 60 * 1000).toISOString();
   private totalTriggersRun: number = 8;
   private tokensUsage = {
@@ -226,6 +243,24 @@ class SystemStateManager {
     return this.killSwitch;
   }
 
+  public getAutoDeployPolicy(): AutoDeployPolicy {
+    return this.autoDeployPolicy;
+  }
+
+  public setAutoDeployPolicy(policy: AutoDeployPolicy, userEmail?: string): AutoDeployPolicy {
+    this.autoDeployPolicy = policy;
+    this.addLog({
+      level: "INFO",
+      source: "policy-control",
+      message: `Auto-Deploy Policy changed to [${policy}] by ${userEmail || "Executive Admin"}. ${
+        policy === "FULL_AUTONOMY"
+          ? "Routine changes will auto-deploy immediately upon 100% test pass; critical changes require approval."
+          : "Strict Mode enabled: ALL changes require manual Executive Admin approval."
+      }`,
+    });
+    return this.autoDeployPolicy;
+  }
+
   public setKillSwitch(value: boolean, userEmail?: string): boolean {
     this.killSwitch = value;
     this.addLog({
@@ -242,6 +277,7 @@ class SystemStateManager {
     return {
       killSwitch: this.killSwitch,
       autonomousLoopActive: !this.killSwitch && this.autonomousLoopActive,
+      autoDeployPolicy: this.autoDeployPolicy,
       lastHourlyTriggerAt: this.lastHourlyTriggerAt,
       totalTriggersRun: this.totalTriggersRun,
       tokensUsage: { ...this.tokensUsage },
@@ -259,21 +295,37 @@ class SystemStateManager {
     return [...this.pendingUpdates];
   }
 
-  public addPendingUpdate(update: Omit<PendingUpdateRecord, "id" | "createdAt" | "status">): PendingUpdateRecord {
+  public addPendingUpdate(
+    update: Omit<PendingUpdateRecord, "id" | "createdAt" | "status"> & {
+      status?: "PENDING" | "APPROVED" | "REJECTED" | "AUTO_MERGED";
+    }
+  ): PendingUpdateRecord {
     const record: PendingUpdateRecord = {
       ...update,
       id: `pr-${Math.floor(1000 + Math.random() * 9000)}`,
-      status: "PENDING",
+      status: update.status || "PENDING",
       createdAt: new Date().toISOString(),
     };
     this.pendingUpdates.unshift(record);
     this.lastHourlyTriggerAt = record.createdAt;
     this.totalTriggersRun += 1;
 
+    const fastTrackPrefix = record.isFastTrack ? "[Fast-Track (Sandbox Verified)] " : "";
+    const logMessage =
+      record.status === "AUTO_MERGED"
+        ? `${fastTrackPrefix}[Auto-Deployed]: Routine fix [${record.id}] "${record.title}" auto-merged to production (Severity: ${
+            record.impactRisk?.severity || "ROUTINE"
+          }). Phase 3 Sandbox: 100% Passed (0 Errors). Zero Admin permission required.`
+        : `${fastTrackPrefix}SystemDevService synthesized update [${record.id}]: "${record.title}". Severity: ${
+            record.impactRisk?.severity || "ROUTINE"
+          }. ${
+            record.impactRisk?.requiresApproval ? "Approval required: high-impact change detected." : "Queued for review."
+          }`;
+
     this.addLog({
-      level: "INFO",
-      source: "ci-cd-webhook",
-      message: `SystemDevService synthesized update [${record.id}]: "${record.title}". Sandbox pass rate: ${(record.testResults.passRate * 100).toFixed(0)}%. Queued for executive review.`,
+      level: record.status === "AUTO_MERGED" ? "INFO" : "WARN",
+      source: record.status === "AUTO_MERGED" ? "auto-deploy-engine" : "ci-cd-webhook",
+      message: logMessage,
     });
 
     return record;
